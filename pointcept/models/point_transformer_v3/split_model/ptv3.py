@@ -6,15 +6,15 @@ from torch.nn.init import trunc_normal_
 import spconv.pytorch as spconv
 
 from pointcept.models.builder import MODELS
-from pointcept.models.utils.diff_point import DiffPoint
+from pointcept.models.utils.structure import Point
 from pointcept.models.modules import PointModule, PointSequential
 
-from pointcept.models.point_transformer_v3.split_model.embedding import Embedding
-from pointcept.models.point_transformer_v3.split_model.block import Block
-from pointcept.models.point_transformer_v3.split_model.grid_pool import GridPooling
-from pointcept.models.point_transformer_v3.split_model.grid_unpool import GridUnpooling
+from .embedding import Embedding
+from .block import Block
+from .grid_pool import GridPooling
+from .grid_unpool import GridUnpooling
 
-@MODELS.register_module("PT-v3m2-diff")
+@MODELS.register_module("PT-v3m2-split")
 class PointTransformerV3(PointModule):
     def __init__(
         self,
@@ -195,7 +195,7 @@ class PointTransformerV3(PointModule):
                 nn.init.zeros_(module.bias)
 
     def forward(self, data_dict):
-        point = DiffPoint(data_dict)
+        point = Point(data_dict)
         point = self.embedding(point)
 
         point.serialization(order=self.order, shuffle_orders=self.shuffle_orders)
