@@ -111,6 +111,25 @@ class DiffPoint(Point):
             voxel_color.index_add_(0, inverse, corner_weight.unsqueeze(-1) * color_exp)
             voxel_color = voxel_color / (total_weight.unsqueeze(-1) + 1e-8)
 
+        voxel_visibility = None
+        if "visibility" in self.keys():
+            visibility_dim = self.visibility.shape[1]
+            visibility_exp = self.visibility.unsqueeze(1).expand(
+                num_points, 8, visibility_dim
+            ).reshape(-1, visibility_dim)
+            voxel_visibility = torch.zeros(
+                num_voxels,
+                visibility_dim,
+                device=self.visibility.device,
+                dtype=self.visibility.dtype,
+            )
+            voxel_visibility.index_add_(
+                0,
+                inverse,
+                corner_weight.unsqueeze(-1) * visibility_exp,
+            )
+            voxel_visibility = voxel_visibility / (total_weight.unsqueeze(-1) + 1e-8)
+
         self._point_to_voxel_map = inverse
 
         # ------------------------------------------------------------------
@@ -131,6 +150,8 @@ class DiffPoint(Point):
             self.origin_coord = voxel_origin_coord
         if voxel_color is not None:
             self.color = voxel_color
+        if voxel_visibility is not None:
+            self.visibility = voxel_visibility
         if self.batch.numel() > 0:
             self['batch_size'] = int(self.batch.max()) + 1
 

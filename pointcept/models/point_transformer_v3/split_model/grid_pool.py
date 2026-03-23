@@ -91,6 +91,10 @@ class GridPooling(PointModule):
             point_dict["color"] = torch_scatter.segment_csr(
                 point.color[indices], idx_ptr, reduce="mean"
             )
+        if "visibility" in point.keys():
+            point_dict["visibility"] = torch_scatter.segment_csr(
+                point.visibility[indices], idx_ptr, reduce="mean"
+            )
         if "grid_size" in point.keys():
             point_dict["grid_size"] = point.grid_size * self.stride
 
