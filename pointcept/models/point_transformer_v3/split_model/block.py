@@ -32,6 +32,10 @@ class Block(PointModule):
         enable_flash=True,
         upcast_attention=True,
         upcast_softmax=True,
+        rope_base=10,
+        shift_coords=None,
+        jitter_coords=None,
+        rescale_coords=None,
     ):
         super().__init__()
         self.channels = channels
@@ -68,6 +72,10 @@ class Block(PointModule):
             enable_flash=enable_flash,
             upcast_attention=upcast_attention,
             upcast_softmax=upcast_softmax,
+            rope_base=rope_base,
+            shift_coords=shift_coords,
+            jitter_coords=jitter_coords,
+            rescale_coords=rescale_coords,
         )
         self.norm2 = PointSequential(norm_layer(channels))
         self.ls2 = PointSequential(

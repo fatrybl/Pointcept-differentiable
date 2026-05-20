@@ -1,3 +1,5 @@
+import math
+
 import torch
 import torch.nn as nn
 import flash_attn
@@ -6,6 +8,43 @@ from pointcept.models.modules import PointModule
 from pointcept.models.utils.misc import offset2bincount
 
 from .rpe import RPE
+
+
+class Point3DRoPE(nn.Module):
+    def __init__(self, head_dim, base=10000):
+        super().__init__()
+        assert head_dim % 3 == 0, (
+            f"Head dimension must be divisible by 3 for 3D RoPE, got {head_dim}"
+        )
+        self.chunk_dim = head_dim // 3
+        inv_freq = 1.0 / (base ** (torch.arange(0, self.chunk_dim, 2).float() / self.chunk_dim))
+        self.register_buffer("inv_freq", inv_freq)
+
+    def _get_cos_sin(self, xyz):
+        freqs = self.inv_freq.unsqueeze(0)
+        chunks = []
+        for i in range(3):
+            emb = xyz[:, i : i + 1] * freqs
+            chunks.append(torch.cat([emb, emb], dim=-1))
+        emb_3d = torch.cat(chunks, dim=-1)
+        return emb_3d.cos().unsqueeze(1), emb_3d.sin().unsqueeze(1)
+
+    @staticmethod
+    def _rotate_half(x):
+        half = x.shape[-1] // 2
+        return torch.cat([-x[..., half:], x[..., :half]], dim=-1)
+
+    def forward(self, q, k, xyz):
+        cos, sin = self._get_cos_sin(xyz)
+        q_chunks = torch.split(q, self.chunk_dim, dim=-1)
+        k_chunks = torch.split(k, self.chunk_dim, dim=-1)
+        cos_chunks = torch.split(cos, self.chunk_dim, dim=-1)
+        sin_chunks = torch.split(sin, self.chunk_dim, dim=-1)
+        q_out, k_out = [], []
+        for i in range(3):
+            q_out.append(q_chunks[i] * cos_chunks[i] + self._rotate_half(q_chunks[i]) * sin_chunks[i])
+            k_out.append(k_chunks[i] * cos_chunks[i] + self._rotate_half(k_chunks[i]) * sin_chunks[i])
+        return torch.cat(q_out, dim=-1), torch.cat(k_out, dim=-1)
 
 
 class SerializedAttention(PointModule):
@@ -23,6 +62,10 @@ class SerializedAttention(PointModule):
         enable_flash=True,
         upcast_attention=True,
         upcast_softmax=True,
+        rope_base=10,
+        shift_coords=None,
+        jitter_coords=None,
+        rescale_coords=None,
     ):
         super().__init__()
         assert channels % num_heads == 0
@@ -60,6 +103,13 @@ class SerializedAttention(PointModule):
         self.proj_drop = torch.nn.Dropout(proj_drop)
         self.softmax = torch.nn.Softmax(dim=-1)
         self.rpe = RPE(patch_size, num_heads) if self.enable_rpe else None
+
+        self.rope_base = rope_base
+        if rope_base:
+            self.rope = Point3DRoPE(head_dim=channels // num_heads, base=rope_base)
+            self.shift_coords = shift_coords
+            self.jitter_coords = jitter_coords
+            self.rescale_coords = rescale_coords
 
     @torch.no_grad()
     def get_rel_pos(self, point, order):
@@ -147,15 +197,53 @@ class SerializedAttention(PointModule):
         # padding and reshape feat and batch for serialized point patch
         qkv = self.qkv(point.feat)[order]
 
-        if not self.enable_flash:
+        if self.rope_base:
+            rope_coord = point.coord[order].clone()
+            if self.training:
+                dd = {"device": rope_coord.device, "dtype": rope_coord.dtype}
+                if self.shift_coords is not None and self.shift_coords > 0:
+                    rope_coord = rope_coord + torch.empty(3, **dd).uniform_(-self.shift_coords, self.shift_coords)
+                if self.jitter_coords is not None and self.jitter_coords > 1.0:
+                    jitter = math.log(self.jitter_coords)
+                    rope_coord = rope_coord * torch.empty(3, **dd).uniform_(-jitter, jitter).exp()
+                if self.rescale_coords is not None and self.rescale_coords > 1.0:
+                    rescale = math.log(self.rescale_coords)
+                    rope_coord = rope_coord * torch.empty(1, **dd).uniform_(-rescale, rescale).exp()
+
+            qkv = qkv.reshape(-1, 3, H, C // H)
+            q, k, v = qkv.unbind(dim=1)
+            q, k = self.rope(q, k, rope_coord)
+
+            if not self.enable_flash:
+                q = q.reshape(-1, K, H, C // H).permute(0, 2, 1, 3)
+                k = k.reshape(-1, K, H, C // H).permute(0, 2, 1, 3)
+                v = v.reshape(-1, K, H, C // H).permute(0, 2, 1, 3)
+                if self.upcast_attention:
+                    q, k = q.float(), k.float()
+                attn = (q * self.scale) @ k.transpose(-2, -1)
+                if self.enable_rpe:
+                    attn = attn + self.rpe(self.get_rel_pos(point, order))
+                if self.upcast_softmax:
+                    attn = attn.float()
+                attn = self.softmax(attn)
+                attn = self.attn_drop(attn).to(v.dtype)
+                feat = (attn @ v).transpose(1, 2).reshape(-1, C)
+            else:
+                feat = flash_attn.flash_attn_varlen_qkvpacked_func(
+                    torch.stack([q, k, v], dim=1).to(torch.bfloat16),
+                    cu_seqlens,
+                    max_seqlen=self.patch_size,
+                    dropout_p=self.attn_drop if self.training else 0,
+                    softmax_scale=self.scale,
+                ).reshape(-1, C)
+                feat = feat.to(qkv.dtype)
+        elif not self.enable_flash:
             # encode and reshape qkv: (N', K, 3, H, C') => (3, N', H, K, C')
             q, k, v = (
                 qkv.reshape(-1, K, 3, H, C // H).permute(2, 0, 3, 1, 4).unbind(dim=0)
             )
-            # attn
             if self.upcast_attention:
-                q = q.float()
-                k = k.float()
+                q, k = q.float(), k.float()
             attn = (q * self.scale) @ k.transpose(-2, -1)  # (N', H, K, K)
             if self.enable_rpe:
                 attn = attn + self.rpe(self.get_rel_pos(point, order))

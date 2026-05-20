@@ -46,6 +46,10 @@ class PointTransformerV3(PointModule):
         mask_token=False,
         enc_mode=False,
         freeze_encoder=False,
+        rope_base=10,
+        shift_coords=None,
+        jitter_coords=None,
+        rescale_coords=None,
     ):
         super().__init__()
         self.num_stages = len(enc_depths)
@@ -120,6 +124,10 @@ class PointTransformerV3(PointModule):
                         enable_flash=enable_flash,
                         upcast_attention=upcast_attention,
                         upcast_softmax=upcast_softmax,
+                        rope_base=rope_base,
+                        shift_coords=shift_coords,
+                        jitter_coords=jitter_coords,
+                        rescale_coords=rescale_coords,
                     ),
                     name=f"block{i}",
                 )
@@ -172,6 +180,10 @@ class PointTransformerV3(PointModule):
                             enable_flash=enable_flash,
                             upcast_attention=upcast_attention,
                             upcast_softmax=upcast_softmax,
+                            rope_base=rope_base,
+                            shift_coords=shift_coords,
+                            jitter_coords=jitter_coords,
+                            rescale_coords=rescale_coords,
                         ),
                         name=f"block{i}",
                     )
