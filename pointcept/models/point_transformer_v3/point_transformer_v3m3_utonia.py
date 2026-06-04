@@ -324,8 +324,7 @@ class SerializedAttention(PointModule):
                 if self.flash_dtype is None:
                     self.flash_dtype = (
                         torch.bfloat16
-                        if torch.cuda.is_available()
-                        and torch.cuda.is_bf16_supported()
+                        if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
                         else torch.float16
                     )
                 feat = flash_attn.flash_attn_varlen_qkvpacked_func(
@@ -361,8 +360,7 @@ class SerializedAttention(PointModule):
                 if self.flash_dtype is None:
                     self.flash_dtype = (
                         torch.bfloat16
-                        if torch.cuda.is_available()
-                        and torch.cuda.is_bf16_supported()
+                        if torch.cuda.is_available() and torch.cuda.is_bf16_supported()
                         else torch.float16
                     )
                 feat = flash_attn.flash_attn_varlen_qkvpacked_func(
